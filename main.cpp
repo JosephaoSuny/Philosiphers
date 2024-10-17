@@ -4,57 +4,66 @@
 #include <mutex>
 #include <random>
 #include <algorithm>
+#include <syncstream>
 
-struct Chopstick {
-    std::mutex* lock = new std::mutex();
-};
+// Wait for all threads to be started before running
+bool should_run = false;
+
+void philosopher_loop(std::mutex* l_chopstick, std::mutex* r_chopstick, int name) {
+    const int rand = static_cast<int>(std::random_device{}()) % 100;
+    int hunger = std::clamp(rand, 25, 100);
+
+    while (hunger != 0) {
+        if (!should_run) continue;
+
+        // If hungry pickup chopstick and eat until full
+        if (hunger < 50) {
+            if (l_chopstick->try_lock()) {
+                if (r_chopstick->try_lock()) {
+                    while (hunger < 100) hunger++;
+
+                    l_chopstick->unlock();
+                    r_chopstick->unlock();
+
+                    continue;
+                }
+                l_chopstick->unlock();
+            }
+        }
+
+        hunger--;
+
+        std::osyncstream synced_out(std::cout);
+
+        synced_out << "Philosopher " << name << " is " << hunger << " % hungry\n";
+    }
+}
 
 int main() {
-    std::array chopsticks = {Chopstick(), Chopstick(), Chopstick(), Chopstick(), Chopstick()};
-    auto* threads = new std::thread[5];
+    // Make an array of "chopsticks" (mutexes)
+    std::array chopsticks = {std::mutex(), std::mutex(), std::mutex(), std::mutex(), std::mutex()};
+    // Make an array of "philosophers" (threads)
+    std::array<std::thread, 5> threads = {  };
 
     for (int i = 0; i < 5; i++) {
-        auto left_idx = i;
-        auto right_idx = i == 4 ? 0 : i + 1;
+        // The chopstick to the left and right of the current philosopher
+        const auto left = &chopsticks[i];
+        const auto right = &chopsticks[i == 4 ? 0 : i + 1];
 
-        auto thread = std::thread([chopsticks](const int l_idx, const int r_idx) {
-            const int rand = static_cast<int>(random()) % 100;
-            int hunger = std::clamp(rand, 25, 100);
-
-            std::cout << "Initial Hunger" << hunger << '\n';
-
-            while (hunger != 0) {
-                if (hunger < 50) {
-                    if (chopsticks[l_idx].lock->try_lock()) {
-                        if (chopsticks[r_idx].lock->try_lock()) {
-                            while (hunger < 100) hunger++;
-
-                            chopsticks[r_idx].lock->unlock();
-                            chopsticks[l_idx].lock->unlock();
-                        } else {
-                            chopsticks[l_idx].lock->unlock();
-                            hunger--;
-                        }
-                    } else {
-                        hunger--;
-                    }
-                } else {
-                    hunger--;
-                }
-
-                printf("Philosopher %d is %d%% hungry\n", l_idx, hunger);
-                fflush(stdout);
-            }
-
-            exit(1);
-        }, left_idx, right_idx);
+        // The running thread
+        auto thread = std::thread(philosopher_loop, left, right, i);
 
         threads[i] = std::move(thread);
     }
 
-    for (int i = 0; i < 5; i++) threads[i].join();
+    // Now that the loop is over, all should run
+    should_run = true;
 
-    free(threads);
+    // Wait ten seconds so I can talk
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+
+    // Join threads
+    for (int i = 0; i < 5; i++) threads[i].join();
 
     return 0;
 }
